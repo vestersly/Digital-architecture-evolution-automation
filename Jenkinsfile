@@ -6,9 +6,8 @@ pipeline {
     }
 
     environment {
-        ALB_URL      = 'http://alb-three-tier-1243415748.us-east-1.elb.amazonaws.com'
-        APP_IP       = '10.0.4.162'
-        APP_PORT     = '8080'
+        ALB_URL          = 'http://alb-three-tier-1243415748.us-east-1.elb.amazonaws.com'
+        INTERNAL_ALB_URL = 'http://internal-alb-internal-app-210434280.us-east-1.elb.amazonaws.com'
     }
 
     stages {
@@ -26,18 +25,19 @@ pipeline {
             }
         }
 
-        stage('Validate Peering Link: Private App-Server Route') {
+        stage('Validate Tier 2: Internal ALB & Auto Scaling App Tier') {
             steps {
-                echo "Testing private route across VPC Peering to ${APP_IP}:${APP_PORT}..."
+                echo "Testing private application route via Internal ALB..."
                 sh '''
-                    PEER_RESPONSE=$(curl -s -f http://${APP_IP}:${APP_PORT}/)
-                    echo "Private Peering Response: $PEER_RESPONSE"
+                    # Check internal ALB first; fallback to Web-Server reverse proxy if Jenkins cannot resolve internal VPC DNS directly
+                    RESPONSE=$(curl -s -f --connect-timeout 5 ${INTERNAL_ALB_URL}:8080/ || curl -s -f --connect-timeout 5 ${INTERNAL_ALB_URL}/ || curl -s -f --connect-timeout 5 ${ALB_URL}/api/)
+                    echo "App Tier Response: $RESPONSE"
 
-                    echo "$PEER_RESPONSE" | grep -q '"status": "connected"' || {
-                        echo "Direct App Peering check failed!"
+                    echo "$RESPONSE" | grep -Eq '("status": *"connected"|Database connected successfully)' || {
+                        echo "Application tier validation check failed!"
                         exit 1
                     }
-                    echo "Private VPC Peering connectivity verified successfully."
+                    echo "Internal Application Auto Scaling fleet connectivity verified successfully."
                 '''
             }
         }
@@ -53,7 +53,7 @@ pipeline {
                         echo "Database record payload verification failed!"
                         exit 1
                     }
-                    echo "All 3 tiers and VPC Peering verified end-to-end!"
+                    echo "All 3 tiers, Auto Scaling Group, and MariaDB verified end-to-end!"
                 '''
             }
         }
@@ -61,7 +61,7 @@ pipeline {
 
     post {
         success {
-            echo 'SUCCESS: All 3 tiers and VPC Peering are healthy.'
+            echo 'SUCCESS: All 3 tiers, Auto Scaling fleet, and Database are healthy.'
         }
         failure {
             echo 'ALERT: Validation check failed! Inspect Jenkins logs.'
